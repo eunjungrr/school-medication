@@ -283,33 +283,41 @@ def inject_css():
     }
 
     /* ── 팝업 모달 다이얼로그 (st.dialog) ── */
-    div[data-baseweb="modal"],
-    div[data-baseweb="backdrop"],
-    div[data-testid="stModal"],
-    [data-testid="stDialog"] ~ div,
-    [aria-modal="true"] {
-        background: rgba(15, 23, 42, 0.45) !important;
-        background-color: rgba(15, 23, 42, 0.45) !important;
-        backdrop-filter: blur(1px) !important;
-        -webkit-backdrop-filter: blur(1px) !important;
-    }
+    /* 1. 배경 오버레이: 뒷배경(의약품 목록 관리 테이블)이 선명하게 보이도록 반투명 딤 처리 */
     div[data-testid="stDialog"],
-    div[role="dialog"],
-    [aria-modal="true"] > div {
+    div.stDialog,
+    div[data-baseweb="modal"],
+    div[data-baseweb="backdrop"] {
+        background: rgba(15, 23, 42, 0.50) !important;
+        background-color: rgba(15, 23, 42, 0.50) !important;
+        backdrop-filter: blur(2px) !important;
+        -webkit-backdrop-filter: blur(2px) !important;
+    }
+
+    /* 2. 팝업 모달 본체(가운데 떠 있는 흰색 카드 박스만 타겟팅) */
+    div[data-testid="stDialog"] > div,
+    div.stDialog > div,
+    div[data-baseweb="modal"] [role="dialog"],
+    div[role="dialog"] {
+        background: #FFFFFF !important;
         background-color: #FFFFFF !important;
         border-radius: 16px !important;
-        box-shadow: 0 25px 60px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.1) !important;
+        box-shadow: 0 25px 60px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(0, 0, 0, 0.1) !important;
         border: 1.5px solid #CBD5E0 !important;
+        color: #172033 !important;
     }
-    div[data-testid="stDialog"] h2,
-    div[data-testid="stDialog"] h3,
-    div[data-testid="stDialog"] p,
-    div[data-testid="stDialog"] span,
-    div[data-testid="stDialog"] label {
+
+    /* 3. 모달 내부 텍스트 및 레이블 가독성 */
+    div[data-testid="stDialog"] > div h2,
+    div[data-testid="stDialog"] > div h3,
+    div[data-testid="stDialog"] > div p,
+    div[data-testid="stDialog"] > div span,
+    div[data-testid="stDialog"] > div label {
         color: #1A1A2E !important;
     }
+
     /* 모달 내 라디오 버튼 */
-    div[data-testid="stDialog"] [data-testid="stRadio"] label p {
+    div[data-testid="stDialog"] > div [data-testid="stRadio"] label p {
         font-weight: 700 !important;
         font-size: 0.95rem !important;
         color: #1A1A2E !important;
@@ -347,8 +355,7 @@ def inject_css():
     [data-testid="stAppViewContainer"] .stButton > button,
     [data-testid="stAppViewContainer"] input,
     [data-testid="stAppViewContainer"] textarea,
-    [data-testid="stAppViewContainer"] [data-baseweb="select"] > div,
-    [data-testid="stDialog"] {
+    [data-testid="stAppViewContainer"] [data-baseweb="select"] > div {
         border-radius: 3px !important;
     }
     .dash-card { box-shadow: none !important; }
