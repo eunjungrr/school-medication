@@ -284,14 +284,16 @@ def inject_css():
 
     /* ── 팝업 모달 다이얼로그 (st.dialog) ── */
     div[data-baseweb="backdrop"], div[data-testid="stModal"] {
-        /* 팝업이 열려도 뒤쪽 의약품 목록이 선명하게 보이도록 유지 */
-        background-color: rgba(15, 23, 42, 0.08) !important;
+        /* 뒷배경이 흰색으로 날아가지 않고 원래 화면 그대로 보이도록 완전히 투명하게 설정 */
+        background: transparent !important;
+        background-color: transparent !important;
         backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
     }
     div[data-testid="stDialog"], div[role="dialog"] {
         background-color: #FFFFFF !important;
         border-radius: 16px !important;
-        box-shadow: 0 20px 50px rgba(0,0,0,0.3) !important;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.08) !important;
         border: 1.5px solid #CBD5E0 !important;
     }
     div[data-testid="stDialog"] h2,
