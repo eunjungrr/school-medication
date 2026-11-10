@@ -483,7 +483,13 @@ def page_login():
         with col_form:
             with st.form("login_form"):
                 st.markdown("#### 🏫 학교 계정 로그인")
-                school = st.text_input("학교명", placeholder="예: ○○초등학교")
+                st.markdown("""
+                <div style="font-size:0.85rem;color:#475569;margin-bottom:12px;background:#F8FAFC;padding:8px 12px;border-radius:6px;border-left:3px solid #64748B;">
+                    ℹ️ 비밀번호 분실로 초기화를 원할 시 관리자에게 연락주세요.<br>
+                    <strong>전화: 041-592-0178</strong>
+                </div>
+                """, unsafe_allow_html=True)
+                school = st.text_input("학교명", placeholder="예: 천안용곡중학교")
                 pwd = st.text_input("비밀번호", type="password", placeholder="비밀번호 입력")
                 submitted = st.form_submit_button("🔑  로그인", use_container_width=True, key="btn_school_login")
 
@@ -513,7 +519,7 @@ def page_login():
                 with st.form("register_form"):
                     st.markdown("#### 🏫 새 학교 등록")
                     st.info("처음 사용하시는 경우 학교명과 비밀번호를 설정해 주세요.\n같은 학교명 + 비밀번호로 어디서든 접속 가능합니다.")
-                    new_school = st.text_input("학교명 *", placeholder="예: ○○초등학교")
+                    new_school = st.text_input("학교명 *", placeholder="예: 천안용곡중학교")
                     new_pwd = st.text_input("비밀번호 설정 *", type="password", placeholder="4자리 이상")
                     new_pwd2 = st.text_input("비밀번호 확인 *", type="password", placeholder="비밀번호 재입력")
                     reg_submitted = st.form_submit_button("✅  등록하기", use_container_width=True)
@@ -639,8 +645,8 @@ def render_sidebar():
         menus = [
             ("📊", "대시보드"),
             ("💊", "의약품 목록"),
-            ("➕", "약품 등록"),
-            ("📥", "스마트 업로드"),
+            ("📥", "약품등록(스마트 업로드)"),
+            ("➕", "약품등록(직접입력)"),
             ("📋", "입출고 이력"),
             ("📤", "내보내기"),
         ]
@@ -725,7 +731,7 @@ def dialog_stock_modal(medicine_id: int):
 
     with col_note:
         default_placeholder = "예: 발열 학생 투약, 보건실 처치 등" if action_type == "불출" else ("예: 정기 구입 입고" if action_type == "입고" else "예: 유통기한 경과 폐기")
-        note = st.text_input("비고 (사유 입력)", placeholder=default_placeholder)
+        note = st.text_input("비고 (사유 입력 - 선택사항)", placeholder=default_placeholder)
 
     # 예상 잔여 재고 계산 및 안내
     if action_type == "입고":
@@ -820,6 +826,43 @@ def dialog_edit_modal(medicine_id: int):
                     st.error(msg)
     with c2:
         if st.button("❌  취소", use_container_width=True):
+            st.rerun()
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  의약품 삭제 확인 팝업 모달 (st.dialog)
+# ═══════════════════════════════════════════════════════════════════
+
+@st.dialog("🗑️ 의약품 삭제 확인")
+def dialog_delete_confirm_modal(medicine_id: int):
+    """의약품 삭제 여부를 재확인하는 팝업 모달"""
+    med = db.get_medicine_by_id(medicine_id)
+    if not med:
+        st.error("해당 약품 정보를 찾을 수 없습니다.")
+        if st.button("닫기"):
+            st.rerun()
+        return
+
+    st.markdown(f"""
+    <div style="font-size:1.05rem;font-weight:700;color:#991B1B;background:#FEF2F2;padding:14px 18px;border-radius:10px;border:1px solid #FCA5A5;margin-bottom:14px;">
+        ⚠️ <strong>[{med['name']}]</strong> 품목을 정말로 삭제하시겠습니까?
+    </div>
+    <div style="font-size:0.88rem;color:#4B5563;line-height:1.6;margin-bottom:12px;">
+        삭제하시면 해당 품목의 <strong>현재 재고({med.get('current_stock', 0)}{med.get('spec', '개')}) 및 모든 입출고 이력</strong>이 함께 영구 삭제됩니다.
+    </div>
+    """, unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🗑️ 영구 삭제", use_container_width=True, type="primary"):
+            ok, msg = db.delete_medicines([medicine_id])
+            if ok:
+                st.toast(f"✅ {med['name']} 품목이 삭제되었습니다.", icon="🗑️")
+                st.rerun()
+            else:
+                st.error(msg)
+    with c2:
+        if st.button("❌ 취소", use_container_width=True):
             st.rerun()
 
 
@@ -1133,12 +1176,7 @@ def render_medicine_table(medicines: list[dict], prefix: str = "main"):
                     dialog_stock_modal(mid)
             with a3:
                 if st.button("🗑️ 삭제", key=f"{prefix}_del_{mid}", help="삭제", use_container_width=True):
-                    ok, msg = db.delete_medicines([mid])
-                    if ok:
-                        st.success(msg)
-                        st.rerun()
-                    else:
-                        st.error(msg)
+                    dialog_delete_confirm_modal(mid)
 
     # ── 일괄 삭제 버튼 ────────────────────────────────────────────
     st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
@@ -1658,10 +1696,10 @@ def main():
         page_dashboard()
     elif tab == "의약품 목록":
         page_medicine_list()
-    elif tab == "약품 등록":
-        page_add_medicine()
-    elif tab == "스마트 업로드":
+    elif tab == "약품등록(스마트 업로드)":
         page_smart_upload()
+    elif tab == "약품등록(직접입력)":
+        page_add_medicine()
     elif tab == "입출고 이력":
         page_history()
     elif tab == "내보내기":
