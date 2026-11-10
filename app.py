@@ -283,17 +283,22 @@ def inject_css():
     }
 
     /* ── 팝업 모달 다이얼로그 (st.dialog) ── */
-    div[data-baseweb="backdrop"], div[data-testid="stModal"] {
-        /* 뒷배경이 흰색으로 날아가지 않고 원래 화면 그대로 보이도록 완전히 투명하게 설정 */
-        background: transparent !important;
-        background-color: transparent !important;
-        backdrop-filter: none !important;
-        -webkit-backdrop-filter: none !important;
+    div[data-baseweb="modal"],
+    div[data-baseweb="backdrop"],
+    div[data-testid="stModal"],
+    [data-testid="stDialog"] ~ div,
+    [aria-modal="true"] {
+        background: rgba(15, 23, 42, 0.45) !important;
+        background-color: rgba(15, 23, 42, 0.45) !important;
+        backdrop-filter: blur(1px) !important;
+        -webkit-backdrop-filter: blur(1px) !important;
     }
-    div[data-testid="stDialog"], div[role="dialog"] {
+    div[data-testid="stDialog"],
+    div[role="dialog"],
+    [aria-modal="true"] > div {
         background-color: #FFFFFF !important;
         border-radius: 16px !important;
-        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.08) !important;
+        box-shadow: 0 25px 60px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.1) !important;
         border: 1.5px solid #CBD5E0 !important;
     }
     div[data-testid="stDialog"] h2,
