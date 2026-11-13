@@ -391,8 +391,12 @@ def init_session():
         "search_keyword": "",
         "search_category": "전체",
         "search_executed": False,
-        "stock_mid": None,      # 현재 입출고 처리 중인 약품 ID
-        "editing_mid": None,    # 현재 수정 중인 약품 ID
+        "stock_mid": None,       # 현재 입출고 처리 중인 약품 ID
+        "editing_mid": None,     # 현재 수정 중인 약품 ID
+        "ocr_rows": None,        # OCR 인식 결과 행 목록 (편집용)
+        "ocr_error": None,       # OCR 오류 메시지
+        "excel_error": None,     # 엑셀 업로드 오류 메시지
+        "excel_records": None,   # 엑셀 파싱 결과
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1287,6 +1291,16 @@ def page_medicine_list():
 def page_add_medicine():
     st.markdown('<div class="section-header">➕ 새 약품 등록</div>',
                 unsafe_allow_html=True)
+
+    # OCR 연결 안내 (prefill 세션이 있을 때)
+    prefill_name   = st.session_state.pop("prefill_name",   "")
+    prefill_expiry = st.session_state.pop("prefill_expiry", "")
+    if prefill_name or prefill_expiry:
+        st.info(
+            f"📷 OCR에서 연결된 항목: **{prefill_name}** / 유통기한: **{prefill_expiry}**\n\n"
+            "아래 폼에 자동 채워졌습니다. 나머지 항목을 채워 등록하세요."
+        )
+
     st.markdown("""
     <div style="background:#EFF6FF;border-radius:10px;padding:12px 16px;margin-bottom:16px;
                 font-size:0.88rem;color:#1E3A5F;border-left:3px solid #3B82F6;">
@@ -1302,7 +1316,7 @@ def page_add_medicine():
             category = st.selectbox("분류 ✳️", [""] + ut.CATEGORIES,
                                     format_func=lambda x: "-- 분류를 선택하세요 --" if x == "" else x)
         with row1[1]:
-            name = st.text_input("품명 ✳️", placeholder="예: 타이레놀 500mg")
+            name = st.text_input("품명 ✳️", value=prefill_name, placeholder="예: 타이레놀 500mg")
         with row1[2]:
             spec = st.text_input("규격/단위 ✳️", placeholder="예: 정, mg, mL")
 
@@ -1315,6 +1329,7 @@ def page_add_medicine():
         with row2[2]:
             expiry_date = st.text_input(
                 "유효기한 ✳️",
+                value=prefill_expiry,
                 placeholder="YYYY-MM-DD 또는 YYYY-MM",
                 help="예: 2026-12-31 또는 2026-12",
             )
@@ -1360,21 +1375,24 @@ def page_add_medicine():
             for e in errors:
                 st.error(f"❌ {e}")
         else:
-            ok, msg = db.add_medicine(st.session_state.school_id, {
-                "category": category,
-                "name": name.strip(),
-                "spec": spec.strip(),
-                "current_stock": current_stock,
-                "recommended_stock": recommended_stock,
-                "expiry_date": expiry_date.strip(),
-                "location": location.strip(),
-                "memo": memo.strip(),
-            })
-            if ok:
-                st.success(f"✅ {msg}")
-                st.balloons()
-            else:
-                st.error(f"❌ {msg}")
+            try:
+                ok, msg = db.add_medicine(st.session_state.school_id, {
+                    "category": category,
+                    "name": name.strip(),
+                    "spec": spec.strip(),
+                    "current_stock": current_stock,
+                    "recommended_stock": recommended_stock,
+                    "expiry_date": expiry_date.strip(),
+                    "location": location.strip(),
+                    "memo": memo.strip(),
+                })
+                if ok:
+                    st.success(f"✅ {msg}")
+                    st.balloons()
+                else:
+                    st.error(f"❌ {msg}")
+            except Exception as e:
+                st.error(f"❌ 등록 중 오류가 발생했습니다: {str(e)}")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1385,42 +1403,193 @@ def page_smart_upload():
     st.markdown('<div class="section-header">📥 스마트 업로드</div>',
                 unsafe_allow_html=True)
 
-    tab_ocr, tab_excel = st.tabs(["📷 사진 OCR 유통기한 인식", "📊 엑셀 일괄 업로드"])
+    # ── 상단 초기화 버튼 (언제든지 접근 가능) ─────────────────────
+    with st.expander("⚠️ 오류 발생 시 또는 처음부터 다시 시작하려면 클릭"):
+        st.markdown("파일 업로드 중 오류가 났거나, 이전 작업을 초기화하고 싶을 때 아래 버튼을 누르세요.")
+        if st.button("🔄 OCR / 업로드 상태 초기화 (처음으로 돌아가기)", type="primary",
+                     key="reset_upload_state"):
+            st.session_state.ocr_rows = None
+            st.session_state.ocr_error = None
+            st.session_state.excel_error = None
+            st.session_state.excel_records = None
+            st.rerun()
 
+    tab_ocr, tab_excel = st.tabs(["📷 사진 OCR 품명·유통기한 인식", "📊 엑셀 일괄 업로드"])
+
+    # ═══════════════════════════════════════════════════════════════
+    # 탭 1: 사진 OCR
+    # ═══════════════════════════════════════════════════════════════
     with tab_ocr:
         st.markdown("""
         <div style="background:#FFF9E6;border-radius:10px;padding:14px 18px;margin:8px 0;
                     border-left:3px solid #F4A261;font-size:0.88rem;">
-            📷 <strong>약품 사진을 업로드하면 유통기한을 자동으로 인식합니다.</strong><br>
-            인식이 완료되면 날짜를 확인하고 등록 폼에서 사용하세요.
+            📷 <strong>약품 사진이나 납품서 사진을 업로드하면 품명과 유통기한을 자동으로 인식합니다.</strong><br>
+            인식된 내용을 직접 수정한 뒤 약품 등록에 활용하세요.<br>
+            <span style="color:#888;">※ 텍스트가 선명하고 정면으로 찍은 사진일수록 인식률이 높습니다.</span>
         </div>
         """, unsafe_allow_html=True)
 
+        # ── 오류 메시지 표시 (이전 실행에서 발생한 오류) ──────────
+        if st.session_state.ocr_error:
+            st.error(f"""
+❌ **이미지 처리 중 오류가 발생했습니다.**
+
+{st.session_state.ocr_error}
+
+> 💡 파일 형식(JPG, PNG)을 확인하고, 손상되지 않은 파일인지 점검해 주세요.
+> 위 초기화 버튼을 눌러 다시 시도하세요.
+""")
+            if st.button("🔄 OCR 초기화", key="ocr_err_reset"):
+                st.session_state.ocr_error = None
+                st.session_state.ocr_rows = None
+                st.rerun()
+
         uploaded_img = st.file_uploader(
-            "약품 사진 업로드 (JPG, PNG)",
+            "약품 / 납품서 사진 업로드 (JPG, PNG)",
             type=["jpg", "jpeg", "png"],
             key="ocr_upload",
+            help="약품 라벨이나 납품서 전체 사진을 업로드하세요. 품명과 유통기한을 자동으로 찾아드립니다.",
         )
 
-        if uploaded_img:
-            col_img, col_result = st.columns(2)
+        if uploaded_img is not None:
+            col_img, col_result = st.columns([1, 1.2])
+
             with col_img:
                 st.image(uploaded_img, caption="업로드된 사진", use_container_width=True)
+
             with col_result:
                 st.markdown("**🔍 OCR 인식 결과**")
-                with st.spinner("유통기한을 인식하는 중..."):
-                    detected_dates = run_ocr_detection(uploaded_img.read())
-                if detected_dates:
-                    st.success(f"✅ {len(detected_dates)}개 날짜 패턴 인식 완료")
-                    for d in detected_dates:
-                        c1, c2 = st.columns([1.5, 1.5])
-                        with c1:
-                            st.code(d, language=None)
-                        with c2:
-                            st.markdown(f"→ {ut.format_expiry_display(d)}")
-                else:
-                    st.warning("날짜 패턴을 인식하지 못했습니다. 유통기한 부분을 클로즈업해 주세요.")
 
+                # 아직 인식 결과가 없으면 실행
+                if st.session_state.ocr_rows is None and st.session_state.ocr_error is None:
+                    with st.spinner("📖 사진을 분석하는 중입니다... 잠시 기다려 주세요."):
+                        try:
+                            image_bytes = uploaded_img.read()
+                            if not image_bytes:
+                                st.session_state.ocr_error = "파일을 읽을 수 없습니다. 다른 파일을 선택해 주세요."
+                                st.rerun()
+                            rows, ocr_method = run_ocr_detection(image_bytes)
+                            st.session_state.ocr_rows = rows
+                            st.session_state.ocr_error = None
+                        except MemoryError:
+                            st.session_state.ocr_error = (
+                                "이미지가 너무 커서 메모리가 부족합니다.\n"
+                                "더 작은 파일(5MB 이하)로 다시 시도해 주세요."
+                            )
+                            st.session_state.ocr_rows = None
+                            st.rerun()
+                        except Exception as e:
+                            st.session_state.ocr_error = (
+                                f"파일을 읽을 수 없습니다. 파일 형식이나 내용을 확인해 주세요.\n"
+                                f"오류 원인: {str(e)}"
+                            )
+                            st.session_state.ocr_rows = None
+                            st.rerun()
+
+                ocr_rows = st.session_state.get("ocr_rows")
+
+                if ocr_rows is None:
+                    # 아직 오류 처리 중이거나 대기 중
+                    pass
+                elif len(ocr_rows) == 0:
+                    st.warning("""
+⚠️ **품명 또는 유통기한을 자동으로 인식하지 못했습니다.**
+
+다음 중 하나를 시도해 보세요:
+- 유통기한 부분을 클로즈업하여 다시 찍어 업로드
+- 아래 수동 입력 테이블에 직접 입력
+                    """)
+                    # OCR 실패 시에도 수동 입력 가능하도록 빈 테이블 제공
+                    st.session_state.ocr_rows = [{"name": "", "expiry": ""}]
+                    st.rerun()
+                else:
+                    st.success(f"✅ {len(ocr_rows)}개 항목 인식 완료")
+                    st.caption("인식된 내용을 아래에서 직접 수정할 수 있습니다.")
+
+            # ── 인식 결과 편집 테이블 ──────────────────────────────
+            if st.session_state.ocr_rows is not None:
+                st.markdown("---")
+                st.markdown("### ✏️ 인식 결과 확인 및 수정")
+                st.caption("품명과 유통기한(YYYY-MM-DD 형식)을 확인하고 필요하면 직접 수정하세요.")
+
+                rows = st.session_state.ocr_rows
+                updated_rows = []
+
+                for i, row in enumerate(rows):
+                    c_num, c_name, c_exp, c_del = st.columns([0.3, 2.2, 1.5, 0.5])
+                    with c_num:
+                        st.markdown(
+                            f"<div style='padding:8px 0;font-weight:700;color:#334155;'>{i+1}</div>",
+                            unsafe_allow_html=True,
+                        )
+                    with c_name:
+                        new_name = st.text_input(
+                            "품명",
+                            value=row.get("name", ""),
+                            key=f"ocr_name_{i}",
+                            placeholder="품명 입력",
+                            label_visibility="collapsed",
+                        )
+                    with c_exp:
+                        new_exp = st.text_input(
+                            "유통기한",
+                            value=row.get("expiry", ""),
+                            key=f"ocr_exp_{i}",
+                            placeholder="YYYY-MM-DD",
+                            label_visibility="collapsed",
+                        )
+                    with c_del:
+                        if st.button("🗑️", key=f"ocr_del_{i}", help="이 행 삭제"):
+                            continue  # 이 행을 updated_rows에 추가하지 않아 삭제
+                    updated_rows.append({"name": new_name, "expiry": new_exp})
+
+                # 행 추가 버튼
+                add_col, _ = st.columns([1, 3])
+                with add_col:
+                    if st.button("➕ 행 추가", key="ocr_add_row"):
+                        updated_rows.append({"name": "", "expiry": ""})
+
+                st.session_state.ocr_rows = updated_rows
+
+                # ── 유효성 체크 및 등록 버튼 ──────────────────────
+                valid_rows = [
+                    r for r in updated_rows
+                    if r.get("name", "").strip() and ut.parse_expiry_date(r.get("expiry", ""))
+                ]
+                invalid_exp = [
+                    r for r in updated_rows
+                    if r.get("expiry", "").strip() and not ut.parse_expiry_date(r.get("expiry", ""))
+                ]
+
+                if invalid_exp:
+                    st.warning(
+                        f"⚠️ 유통기한 형식이 올바르지 않은 행이 {len(invalid_exp)}개 있습니다. "
+                        f"YYYY-MM-DD 형식으로 입력해 주세요."
+                    )
+
+                if valid_rows:
+                    st.markdown(f"**등록 가능한 품목: {len(valid_rows)}개**")
+                    if st.button(
+                        f"✅ {len(valid_rows)}개 품목 약품 등록(직접입력) 페이지로 연결",
+                        type="primary",
+                        key="ocr_goto_register",
+                    ):
+                        # 첫 번째 항목 정보를 직접입력 폼에 연결
+                        first = valid_rows[0]
+                        st.session_state["prefill_name"] = first["name"]
+                        st.session_state["prefill_expiry"] = first["expiry"]
+                        st.session_state.active_tab = "약품등록(직접입력)"
+                        st.info(
+                            f"💡 '{first['name']}' 항목 정보가 직접입력 폼에 자동으로 채워집니다. "
+                            f"나머지 항목은 순서대로 직접 등록해 주세요."
+                        )
+                        st.rerun()
+                else:
+                    st.info("품명과 유통기한을 모두 입력한 항목이 없습니다. 위 테이블을 채워 주세요.")
+
+    # ═══════════════════════════════════════════════════════════════
+    # 탭 2: 엑셀 일괄 업로드
+    # ═══════════════════════════════════════════════════════════════
     with tab_excel:
         st.markdown("""
         <div style="background:#F0FFF4;border-radius:10px;padding:14px 18px;margin:8px 0;
@@ -1429,6 +1598,20 @@ def page_smart_upload():
             아래에서 양식을 다운로드하여 작성 후 업로드해 주세요.
         </div>
         """, unsafe_allow_html=True)
+
+        # ── 오류 메시지 표시 ───────────────────────────────────────
+        if st.session_state.excel_error:
+            st.error(f"""
+❌ **파일을 읽을 수 없습니다. 파일 형식이나 내용을 확인해 주세요.**
+
+{st.session_state.excel_error}
+
+> 💡 아래 양식을 다운로드하여 올바른 형식으로 작성 후 다시 업로드해 주세요.
+""")
+            if st.button("🔄 엑셀 오류 초기화", key="excel_err_reset"):
+                st.session_state.excel_error = None
+                st.session_state.excel_records = None
+                st.rerun()
 
         template_bytes = ut.create_upload_template()
         st.download_button(
@@ -1443,67 +1626,172 @@ def page_smart_upload():
             "엑셀/CSV 파일 업로드",
             type=["xlsx", "xls", "csv"],
             key="excel_upload",
+            help="위에서 다운로드한 양식을 채워서 업로드하세요.",
         )
-        if uploaded_excel:
-            file_bytes = uploaded_excel.read()
-            records, errors = ut.parse_upload_excel(file_bytes)
+
+        if uploaded_excel is not None:
+            try:
+                file_bytes = uploaded_excel.read()
+                if not file_bytes:
+                    st.session_state.excel_error = "파일이 비어 있습니다. 다른 파일을 선택해 주세요."
+                    st.session_state.excel_records = None
+                    st.rerun()
+                records, errors = ut.parse_upload_excel(file_bytes)
+                st.session_state.excel_error = None
+                st.session_state.excel_records = records
+            except MemoryError:
+                st.session_state.excel_error = "파일이 너무 큽니다. 더 작은 파일로 나눠서 업로드해 주세요."
+                st.session_state.excel_records = None
+                uploaded_excel = None
+                st.rerun()
+            except Exception as e:
+                st.session_state.excel_error = (
+                    f"파일을 읽을 수 없습니다. 파일 형식이나 내용을 확인해 주세요.\n"
+                    f"오류 원인: {str(e)}"
+                )
+                st.session_state.excel_records = None
+                uploaded_excel = None
+                st.rerun()
+
             if errors:
                 st.warning("⚠️ 일부 행을 건너뜁니다:")
                 for e in errors:
                     st.caption(e)
+
+            records = st.session_state.get("excel_records") or []
             if records:
                 st.markdown(f"**총 {len(records)}개 품목 미리보기:**")
                 st.dataframe(pd.DataFrame(records), use_container_width=True, height=250)
                 if st.button(f"✅ {len(records)}개 품목 일괄 등록", type="primary"):
                     with st.spinner("등록 중..."):
-                        cnt, errs = db.bulk_insert_medicines(
-                            st.session_state.school_id, records
-                        )
-                    st.success(f"✅ {cnt}개 품목 등록 완료!")
-                    for e in errs:
-                        st.caption(f"⚠️ {e}")
-                    if cnt > 0:
-                        st.balloons()
+                        try:
+                            cnt, errs = db.bulk_insert_medicines(
+                                st.session_state.school_id, records
+                            )
+                            st.success(f"✅ {cnt}개 품목 등록 완료!")
+                            for e in errs:
+                                st.caption(f"⚠️ {e}")
+                            st.session_state.excel_records = None
+                            if cnt > 0:
+                                st.balloons()
+                        except Exception as e:
+                            st.error(
+                                f"❌ 등록 중 오류가 발생했습니다: {str(e)}\n"
+                                "데이터 형식을 확인하고 다시 시도해 주세요."
+                            )
             else:
                 st.error("❌ 등록할 수 있는 품목이 없습니다. 양식을 확인해 주세요.")
 
 
-def run_ocr_detection(image_bytes: bytes) -> list[str]:
-    """이미지에서 유통기한 날짜 패턴을 OCR로 인식합니다."""
-    from PIL import Image
-    img = Image.open(io.BytesIO(image_bytes))
-    full_text = ""
+def run_ocr_detection(image_bytes: bytes) -> tuple[list[dict], str]:
+    """
+    이미지에서 품명과 유통기한을 OCR로 인식합니다.
+    반환: (rows, error_msg)
+      - rows: [{"name": str, "expiry": str}, ...] — 인식된 품목 목록
+      - error_msg: 오류 발생 시 메시지 (정상이면 "")
+    OCR 엔진 우선순위: easyocr → pytesseract → (텍스트 추출 없음, 수동 입력 유도)
+    """
+    if not image_bytes:
+        return [], "업로드된 이미지가 비어 있습니다."
 
+    full_text = ""
+    ocr_method = "없음"
+
+    # ── 1. 이미지 유효성 검사 ───────────────────────────────────────
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(image_bytes))
+        img.verify()  # 손상된 파일 감지
+        # verify() 후에는 재오픈 필요
+        img = Image.open(io.BytesIO(image_bytes))
+        # 너무 큰 이미지 자동 축소 (메모리 초과 방지)
+        MAX_SIDE = 2000
+        if max(img.width, img.height) > MAX_SIDE:
+            ratio = MAX_SIDE / max(img.width, img.height)
+            img = img.resize(
+                (int(img.width * ratio), int(img.height * ratio)),
+                Image.LANCZOS
+            )
+            # 축소된 이미지를 bytes로 재변환
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=90)
+            image_bytes = buf.getvalue()
+    except Exception as e:
+        return [], f"이미지 파일을 열 수 없습니다: {str(e)}\n지원 형식: JPG, PNG"
+
+    # ── 2. OCR 텍스트 추출 시도 ─────────────────────────────────────
     try:
         import easyocr
-        reader = easyocr.Reader(["ko", "en"], gpu=False, verbose=False)
-        result = reader.readtext(image_bytes, detail=0)
-        full_text = " ".join(result)
+        try:
+            reader = easyocr.Reader(["ko", "en"], gpu=False, verbose=False)
+            result = reader.readtext(image_bytes, detail=0)
+            full_text = "\n".join(result)
+            ocr_method = "easyocr"
+        except Exception as e:
+            full_text = ""
+            ocr_method = f"easyocr 오류({str(e)[:60]})"
     except ImportError:
+        pass
+
+    if not full_text:
         try:
             import pytesseract
-            full_text = pytesseract.image_to_string(img, lang="kor+eng")
-        except Exception:
+            from PIL import Image as PILImage
+            pil_img = PILImage.open(io.BytesIO(image_bytes))
+            full_text = pytesseract.image_to_string(pil_img, lang="kor+eng")
+            ocr_method = "pytesseract"
+        except ImportError:
+            ocr_method = "미설치"
+        except Exception as e:
             full_text = ""
+            ocr_method = f"pytesseract 오류({str(e)[:60]})"
 
-    date_patterns = [
-        r"\d{4}[-./]\d{1,2}[-./]\d{1,2}",
-        r"\d{4}[-./]\d{1,2}",
-        r"\d{8}",
-        r"\d{6}",
-    ]
-    found = set()
-    for pattern in date_patterns:
-        for m in re.findall(pattern, full_text):
-            if re.match(r"^\d{8}$", m):
-                normalized = f"{m[:4]}-{m[4:6]}-{m[6:]}"
-            elif re.match(r"^\d{6}$", m):
-                normalized = f"{m[:4]}-{m[4:]}"
-            else:
-                normalized = re.sub(r"[./]", "-", m)
-            if ut.parse_expiry_date(normalized):
-                found.add(normalized)
-    return sorted(found, reverse=True)
+    # ── 3. 날짜 패턴 추출 ───────────────────────────────────────────
+    date_pattern = re.compile(
+        r"\d{4}[-./]\d{1,2}[-./]\d{1,2}"
+        r"|\d{4}[-./]\d{1,2}"
+        r"|\d{8}"
+        r"|\d{6}"
+    )
+
+    def normalize_date(raw: str) -> str:
+        if re.match(r"^\d{8}$", raw):
+            return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+        elif re.match(r"^\d{6}$", raw):
+            return f"{raw[:4]}-{raw[4:]}"
+        else:
+            return re.sub(r"[./]", "-", raw)
+
+    # ── 4. 행(line) 단위로 품명 + 유통기한 쌍 추출 ─────────────────
+    rows = []
+    seen_dates = set()
+
+    if full_text:
+        lines = [l.strip() for l in full_text.splitlines() if l.strip()]
+        for line in lines:
+            dates_in_line = date_pattern.findall(line)
+            # 날짜 없는 줄은 품명 후보
+            if not dates_in_line:
+                continue
+            # 날짜가 있는 줄에서 품명(날짜 제외 부분)과 날짜를 추출
+            name_part = date_pattern.sub("", line).strip()
+            # 번호/특수문자로만 된 품명 후보 제거
+            name_part = re.sub(r"^[\d\s\.\-\(\)\[\]①②③④⑤⑥⑦⑧⑨⑩]+", "", name_part).strip()
+            for raw_date in dates_in_line:
+                nd = normalize_date(raw_date)
+                if ut.parse_expiry_date(nd) and nd not in seen_dates:
+                    seen_dates.add(nd)
+                    rows.append({"name": name_part, "expiry": nd})
+
+        # 품명이 없는 날짜들은 품명 빈칸으로 추가
+        if not rows:
+            for raw_date in date_pattern.findall(full_text):
+                nd = normalize_date(raw_date)
+                if ut.parse_expiry_date(nd) and nd not in seen_dates:
+                    seen_dates.add(nd)
+                    rows.append({"name": "", "expiry": nd})
+
+    return rows, ocr_method
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1706,20 +1994,54 @@ def main():
     render_sidebar()
 
     tab = st.session_state.active_tab
-    if tab == "대시보드":
-        page_dashboard()
-    elif tab == "의약품 목록":
-        page_medicine_list()
-    elif tab == "약품등록(스마트 업로드)":
-        page_smart_upload()
-    elif tab == "약품등록(직접입력)":
-        page_add_medicine()
-    elif tab == "입출고 이력":
-        page_history()
-    elif tab == "내보내기":
-        page_export()
-    else:
-        page_dashboard()
+    try:
+        if tab == "대시보드":
+            page_dashboard()
+        elif tab == "의약품 목록":
+            page_medicine_list()
+        elif tab == "약품등록(스마트 업로드)":
+            page_smart_upload()
+        elif tab == "약품등록(직접입력)":
+            page_add_medicine()
+        elif tab == "입출고 이력":
+            page_history()
+        elif tab == "내보내기":
+            page_export()
+        else:
+            page_dashboard()
+    except MemoryError:
+        st.error(
+            "❌ **메모리 부족 오류**\n\n"
+            "처리할 파일이 너무 크거나 데이터가 많아 메모리가 부족합니다.\n"
+            "파일 크기를 줄이거나 앱을 새로고침(F5)해 주세요."
+        )
+        _show_global_reset_button()
+    except Exception as e:
+        st.error(
+            f"❌ **예상치 못한 오류가 발생했습니다.**\n\n"
+            f"오류 내용: `{str(e)}`\n\n"
+            "앱을 새로고침(F5)하거나 아래 초기화 버튼을 눌러 처음 화면으로 돌아가세요."
+        )
+        _show_global_reset_button()
+
+
+def _show_global_reset_button():
+    """전역 초기화 버튼: 오류 발생 시 사용자가 처음 화면으로 돌아올 수 있도록 합니다."""
+    st.markdown("---")
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("🔄 처음으로 돌아가기", type="primary", key="global_reset_btn"):
+            # 파일 업로드 / OCR 관련 세션 초기화
+            for key in ["ocr_rows", "ocr_error", "excel_error", "excel_records"]:
+                st.session_state[key] = None
+            st.session_state.active_tab = "대시보드"
+            st.rerun()
+    with col2:
+        if st.button("🚪 로그아웃 후 처음 화면으로", key="global_logout_btn"):
+            for k in list(st.session_state.keys()):
+                del st.session_state[k]
+            init_session()
+            st.rerun()
 
 
 if __name__ == "__main__":
